@@ -11,6 +11,7 @@ const RenderConstants = require('./RenderConstants');
 const ShaderManager = require('./ShaderManager');
 const SVGSkin = require('./SVGSkin');
 const TextBubbleSkin = require('./TextBubbleSkin');
+const TextSkin = require('./TextSkin');
 const EffectTransform = require('./EffectTransform');
 const log = require('./util/log');
 
@@ -349,6 +350,34 @@ class RenderWebGL extends EventEmitter {
         return skinId;
     }
 
+        /**
+     * Create a new SVG skin using the text bubble svg creator. The rotation center
+     * is always placed at the top left.
+     * @param {!string} text - the text for the bubble.
+     * @returns {!int} the ID for the new skin.
+     */
+    createTxtSkin (text, color, font, fontSize) {
+        const skinId = this._nextSkinId++;
+        const newSkin = new TextSkin(skinId, this);
+        newSkin.setText(text);
+        newSkin.setColor(color);
+        newSkin.setFont(font);
+        newSkin.setFontSize(fontSize);
+        // newSkin.addListener(Skin.Events.WasAltered, this._skinWasAltered.bind(this, newSkin));
+        this._allSkins[skinId] = newSkin;
+        return skinId;
+    }
+
+    updateTxtSkin (skinId, text, color, font, fontSize) {
+        const newSkin = this._allSkins[skinId] ;
+        // const newSkin = this._allSkins[skinId] instanceof TextSkin;
+        newSkin.setText(text);
+        newSkin.setColor(color);
+        newSkin.setFont(font);
+        newSkin.setFontSize(fontSize);
+        return skinId;
+    }
+
     /**
      * Update an existing SVG skin, or create an SVG skin if the previous skin was not SVG.
      * @param {!int} skinId the ID for the skin to change.
@@ -450,6 +479,17 @@ class RenderWebGL extends EventEmitter {
         return drawableID;
     }
 
+    createDrawableText () {
+        const drawableID = this._nextDrawableId++;
+        const drawable = new Drawable(drawableID);
+        this._allDrawables[drawableID] = drawable;
+        this._addToDrawList(drawableID, "pen");
+
+        drawable.skin = null;
+
+        return drawableID;
+    }
+
     /**
      * Set the layer group ordering for the renderer.
      * @param {Array<string>} groupOrdering The ordered array of layer group
@@ -531,6 +571,44 @@ class RenderWebGL extends EventEmitter {
             log.warn('Could not destroy drawable that could not be found in layer group.');
             return;
         }
+    }
+
+    destroyAllTextDrawables (group) {
+        let toBeRemoved = [];
+        for(let drawableID = 0; drawableID < this._allDrawables.length; ++drawableID){
+
+            const drawable = this._allDrawables[drawableID];
+            if(drawable && drawable._skin.constructor.name === "TextSkin"){
+                toBeRemoved.push(drawableID);
+                drawable.dispose();
+                delete this._allDrawables[drawableID];
+
+                const currentLayerGroup = this._layerGroups[group];
+                const endIndex = this._endIndexForKnownLayerGroup(currentLayerGroup);
+
+                let index = currentLayerGroup.drawListOffset;
+                while (index < endIndex) {
+                    if (this._drawList[index] === drawableID) {
+                        break;
+                    }
+                    index++;
+                }
+                if (index < endIndex) {
+                    this._drawList.splice(index, 1);
+                    this._updateOffsets('delete', currentLayerGroup.groupIndex);
+                } else {
+                    log.warn('Could not destroy drawable that could not be found in layer group.');
+                    return;
+                }
+            }
+        }
+        for(let index = 0; index < toBeRemoved.length; ++index){
+            this._allDrawables.splice(toBeRemoved[index], 1);
+        }
+    }
+
+    getDrawable(drawableID){
+        return this._allDrawables[drawableID];
     }
 
     /**
@@ -1451,6 +1529,46 @@ class RenderWebGL extends EventEmitter {
         skin._drawToBuffer(this._queryBufferInfo.attachments[0], bounds.left, bounds.top);
     }
 
+    /**
+     * Write a text onto a pen layer.
+     * @param {int} penSkinID - the unique ID of a Pen Skin.
+     * @param {int} stampID - the unique ID of the Drawable to use as the stamp.
+     */
+    // penWrite (penSkinID, text, penAttributes, fontAttributes, x0, y0, isUpdatable) {
+    penWrite (penSkinID, textSkinID, position) {
+        // isUpdatable = (isUpdatable == 'true');
+
+        // var position = [x0, y0];
+        // var color = penAttributes.color4f;
+
+        // var colorHex = `rgba(${color[0] *255}, ${color[1]*255}, ${color[2]*255}, ${color[3]*255})` + "";
+
+        // // var skinID;
+
+        // const skin = this._allSkins[this._textSkinID] instanceof TextSkin;
+
+        // if(!skin){
+        //     this._textSkinID = this.createTxtSkin(text, colorHex, fontAttributes.font, fontAttributes.size);
+        //     // skinID = this._textSkinID;
+        // }
+        // else{
+        //     this.updateTxtSkin(this._textSkinID, text, colorHex, fontAttributes.font, fontAttributes.size);
+        // }
+        // // if(isUpdatable){
+        // //     skinID = this._firstSkinID;
+        // //     this.updateTxtSkin(skinID, text, colorHex, fontAttributes.font, fontAttributes.size);
+        // // }
+        // // else{
+        // //     var newSkinID = this.createTxtSkin(text, colorHex, fontAttributes.font, fontAttributes.size);
+        // //     skinID = newSkinID;
+        // // }
+
+        this.updateDrawableProperties(penSkinID, {
+            skinId: textSkinID,
+            position: position
+        });
+    }
+
     /* ******
      * Truly internal functions: these support the functions above.
      ********/
@@ -1578,66 +1696,67 @@ class RenderWebGL extends EventEmitter {
 
             const drawable = this._allDrawables[drawableID];
             /** @todo check if drawable is inside the viewport before anything else */
+            if(drawable){
+                // Hidden drawables (e.g., by a "hide" block) are not drawn unless
+                // the ignoreVisibility flag is used (e.g. for stamping or touchingColor).
+                if (!drawable.getVisible() && !opts.ignoreVisibility) continue;
 
-            // Hidden drawables (e.g., by a "hide" block) are not drawn unless
-            // the ignoreVisibility flag is used (e.g. for stamping or touchingColor).
-            if (!drawable.getVisible() && !opts.ignoreVisibility) continue;
+                // Combine drawable scale with the native vs. backing pixel ratio
+                const drawableScale = [
+                    drawable.scale[0] * this._gl.canvas.width / this._nativeSize[0],
+                    drawable.scale[1] * this._gl.canvas.height / this._nativeSize[1]
+                ];
 
-            // Combine drawable scale with the native vs. backing pixel ratio
-            const drawableScale = [
-                drawable.scale[0] * this._gl.canvas.width / this._nativeSize[0],
-                drawable.scale[1] * this._gl.canvas.height / this._nativeSize[1]
-            ];
+                // If the skin or texture isn't ready yet, skip it.
+                if (!drawable.skin || !drawable.skin.getTexture(drawableScale)) continue;
 
-            // If the skin or texture isn't ready yet, skip it.
-            if (!drawable.skin || !drawable.skin.getTexture(drawableScale)) continue;
+                const uniforms = {};
 
-            const uniforms = {};
+                let effectBits = drawable.getEnabledEffects();
+                effectBits &= opts.hasOwnProperty('effectMask') ? opts.effectMask : effectBits;
+                const newShader = this._shaderManager.getShader(drawMode, effectBits);
 
-            let effectBits = drawable.getEnabledEffects();
-            effectBits &= opts.hasOwnProperty('effectMask') ? opts.effectMask : effectBits;
-            const newShader = this._shaderManager.getShader(drawMode, effectBits);
+                // Manually perform region check. Do not create functions inside a
+                // loop.
+                if (this._regionId !== newShader) {
+                    this._doExitDrawRegion();
+                    this._regionId = newShader;
 
-            // Manually perform region check. Do not create functions inside a
-            // loop.
-            if (this._regionId !== newShader) {
-                this._doExitDrawRegion();
-                this._regionId = newShader;
+                    currentShader = newShader;
+                    gl.useProgram(currentShader.program);
+                    twgl.setBuffersAndAttributes(gl, currentShader, this._bufferInfo);
+                    Object.assign(uniforms, {
+                        u_projectionMatrix: projection,
+                        u_fudge: window.fudge || 0
+                    });
+                }
 
-                currentShader = newShader;
-                gl.useProgram(currentShader.program);
-                twgl.setBuffersAndAttributes(gl, currentShader, this._bufferInfo);
-                Object.assign(uniforms, {
-                    u_projectionMatrix: projection,
-                    u_fudge: window.fudge || 0
-                });
+                Object.assign(uniforms,
+                    drawable.skin.getUniforms(drawableScale),
+                    drawable.getUniforms());
+
+                // Apply extra uniforms after the Drawable's, to allow overwriting.
+                if (opts.extraUniforms) {
+                    Object.assign(uniforms, opts.extraUniforms);
+                }
+
+                if (uniforms.u_skin) {
+                    twgl.setTextureParameters(
+                        gl, uniforms.u_skin, {minMag: drawable.useNearest ? gl.NEAREST : gl.LINEAR}
+                    );
+                }
+
+                twgl.setUniforms(currentShader, uniforms);
+
+                /* adjust blend function for this skin */
+                if (drawable.skin.hasPremultipliedAlpha){
+                    gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+                } else {
+                    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+                }
+
+                twgl.drawBufferInfo(gl, this._bufferInfo, gl.TRIANGLES);
             }
-
-            Object.assign(uniforms,
-                drawable.skin.getUniforms(drawableScale),
-                drawable.getUniforms());
-
-            // Apply extra uniforms after the Drawable's, to allow overwriting.
-            if (opts.extraUniforms) {
-                Object.assign(uniforms, opts.extraUniforms);
-            }
-
-            if (uniforms.u_skin) {
-                twgl.setTextureParameters(
-                    gl, uniforms.u_skin, {minMag: drawable.useNearest ? gl.NEAREST : gl.LINEAR}
-                );
-            }
-
-            twgl.setUniforms(currentShader, uniforms);
-
-            /* adjust blend function for this skin */
-            if (drawable.skin.hasPremultipliedAlpha){
-                gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-            } else {
-                gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-            }
-
-            twgl.drawBufferInfo(gl, this._bufferInfo, gl.TRIANGLES);
         }
 
         this._regionId = null;
