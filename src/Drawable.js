@@ -184,55 +184,98 @@ class Drawable {
     }
 
     /**
+     * Update the position if it is different. Marks the transform as dirty.
+     * @param {Array.<number>} position A new position.
+     */
+    updatePosition (position) {
+        if (this._position[0] !== position[0] ||
+            this._position[1] !== position[1]) {
+            this._position[0] = Math.round(position[0]);
+            this._position[1] = Math.round(position[1]);
+            this.setTransformDirty();
+        }
+    }
+
+    /**
+     * Update the direction if it is different. Marks the transform as dirty.
+     * @param {number} direction A new direction.
+     */
+    updateDirection (direction) {
+        if (this._direction !== direction) {
+            this._direction = direction;
+            this._rotationTransformDirty = true;
+            this.setTransformDirty();
+        }
+    }
+
+    /**
+     * Update the scale if it is different. Marks the transform as dirty.
+     * @param {Array.<number>} scale A new scale.
+     */
+    updateScale (scale) {
+        if (this._scale[0] !== scale[0] ||
+            this._scale[1] !== scale[1]) {
+            this._scale[0] = scale[0];
+            this._scale[1] = scale[1];
+            this._rotationCenterDirty = true;
+            this._skinScaleDirty = true;
+            this.setTransformDirty();
+        }
+    }
+
+    /**
+     * Update visibility if it is different. Marks the convex hull as dirty.
+     * @param {boolean} visible A new visibility state.
+     */
+    updateVisible (visible) {
+        if (this._visible !== visible) {
+            this._visible = visible;
+            this.setConvexHullDirty();
+        }
+    }
+
+    /**
+     * Update an effect. Marks the convex hull as dirty if the effect changes shape.
+     * @param {string} effectName The name of the effect.
+     * @param {number} rawValue A new effect value.
+     */
+    updateEffect (effectName, rawValue) {
+        const effectInfo = ShaderManager.EFFECT_INFO[effectName];
+        if (rawValue) {
+            this._effectBits |= effectInfo.mask;
+        } else {
+            this._effectBits &= ~effectInfo.mask;
+        }
+        const converter = effectInfo.converter;
+        this._uniforms[effectInfo.uniformName] = converter(rawValue);
+        if (effectInfo.shapeChanges) {
+            this.setConvexHullDirty();
+        }
+    }
+
+    /**
      * Update the position, direction, scale, or effect properties of this Drawable.
+     * @deprecated Use specific update* methods instead.
      * @param {object.<string,*>} properties The new property values to set.
      */
     updateProperties (properties) {
-        let dirty = false;
-        if ('position' in properties && (
-            this._position[0] !== properties.position[0] ||
-            this._position[1] !== properties.position[1])) {
-            this._position[0] = Math.round(properties.position[0]);
-            this._position[1] = Math.round(properties.position[1]);
-            dirty = true;
+        if ('position' in properties) {
+            this.updatePosition(properties.position);
         }
-        if ('direction' in properties && this._direction !== properties.direction) {
-            this._direction = properties.direction;
-            this._rotationTransformDirty = true;
-            dirty = true;
+        if ('direction' in properties) {
+            this.updateDirection(properties.direction);
         }
-        if ('scale' in properties && (
-            this._scale[0] !== properties.scale[0] ||
-            this._scale[1] !== properties.scale[1])) {
-            this._scale[0] = properties.scale[0];
-            this._scale[1] = properties.scale[1];
-            this._rotationCenterDirty = true;
-            this._skinScaleDirty = true;
-            dirty = true;
+        if ('scale' in properties) {
+            this.updateScale(properties.scale);
         }
         if ('visible' in properties) {
-            this._visible = properties.visible;
-            this.setConvexHullDirty();
-        }
-        if (dirty) {
-            this.setTransformDirty();
+            this.updateVisible(properties.visible);
         }
         const numEffects = ShaderManager.EFFECTS.length;
         for (let index = 0; index < numEffects; ++index) {
             const effectName = ShaderManager.EFFECTS[index];
             if (effectName in properties) {
-                const rawValue = properties[effectName];
-                const effectInfo = ShaderManager.EFFECT_INFO[effectName];
-                if (rawValue) {
-                    this._effectBits |= effectInfo.mask;
-                } else {
-                    this._effectBits &= ~effectInfo.mask;
-                }
-                const converter = effectInfo.converter;
-                this._uniforms[effectInfo.uniformName] = converter(rawValue);
-                if (effectInfo.shapeChanges) {
-                    this.setConvexHullDirty();
-                }
+                this.updateEffect(effectName, properties[effectName]);
             }
         }
     }
@@ -418,7 +461,9 @@ class Drawable {
 
         const localPosition = getLocalPosition(this, vec);
 
-        if (this.useNearest) {
+        // We're not passing in a scale to useNearest, but that's okay because "touching" queries
+        // happen at the "native" size anyway.
+        if (this.useNearest()) {
             return this.skin.isTouchingNearest(localPosition);
         }
         return this.skin.isTouchingLinear(localPosition);
@@ -426,8 +471,10 @@ class Drawable {
 
     /**
      * Should the drawable use NEAREST NEIGHBOR or LINEAR INTERPOLATION mode
+     * @param {?Array<Number>} scale Optionally, the screen-space scale of the drawable.
+     * @return {boolean} True if the drawable should use nearest-neighbor interpolation.
      */
-    get useNearest () {
+    useNearest (scale = this.scale) {
         // Raster skins (bitmaps) should always prefer nearest neighbor
         if (this.skin.isRaster) {
             return true;
@@ -449,8 +496,8 @@ class Drawable {
         }
 
         // If the scale of the skin is very close to 100 (0.99999 variance is okay I guess)
-        if (Math.abs(this.scale[0]) > 99 && Math.abs(this.scale[0]) < 101 &&
-            Math.abs(this.scale[1]) > 99 && Math.abs(this.scale[1]) < 101) {
+        if (Math.abs(scale[0]) > 99 && Math.abs(scale[0]) < 101 &&
+            Math.abs(scale[1]) > 99 && Math.abs(scale[1]) < 101) {
             return true;
         }
         return false;
@@ -530,7 +577,6 @@ class Drawable {
      * @return {!Rectangle} Bounds for the Drawable.
      */
     getFastBounds (result) {
-        this.updateMatrix();
         if (!this.needsConvexHullPoints()) {
             return this.getBounds(result);
         }
@@ -643,7 +689,7 @@ class Drawable {
         }
         const textColor =
         // commenting out to only use nearest for now
-        // drawable.useNearest ?
+        // drawable.useNearest() ?
              drawable.skin._silhouette.colorAtNearest(localPosition, dst);
         // : drawable.skin._silhouette.colorAtLinear(localPosition, dst);
         return EffectTransform.transformColor(drawable, textColor, textColor);
