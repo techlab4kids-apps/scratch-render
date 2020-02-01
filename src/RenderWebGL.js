@@ -11,6 +11,7 @@ const RenderConstants = require('./RenderConstants');
 const ShaderManager = require('./ShaderManager');
 const SVGSkin = require('./SVGSkin');
 const TextBubbleSkin = require('./TextBubbleSkin');
+// GORRU
 const TextSkin = require('./TextSkin');
 const EffectTransform = require('./EffectTransform');
 const log = require('./util/log');
@@ -197,7 +198,7 @@ class RenderWebGL extends EventEmitter {
         gl.disable(gl.DEPTH_TEST);
         /** @todo disable when no partial transparency? */
         gl.enable(gl.BLEND);
-        gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     }
 
     /**
@@ -350,13 +351,16 @@ class RenderWebGL extends EventEmitter {
         return skinId;
     }
 
+
         /**
      * Create a new SVG skin using the text bubble svg creator. The rotation center
      * is always placed at the top left.
      * @param {!string} text - the text for the bubble.
      * @returns {!int} the ID for the new skin.
      */
-    createTxtSkin (text, color, font, fontSize) {
+
+        // GORRU
+        createTxtSkin (text, color, font, fontSize) {
         const skinId = this._nextSkinId++;
         const newSkin = new TextSkin(skinId, this);
         newSkin.setText(text);
@@ -477,6 +481,7 @@ class RenderWebGL extends EventEmitter {
         return drawableID;
     }
 
+    // GORRU
     createDrawableText () {
         const drawableID = this._nextDrawableId++;
         const drawable = new Drawable(drawableID);
@@ -571,6 +576,7 @@ class RenderWebGL extends EventEmitter {
         }
     }
 
+    // GORRU
     destroyAllTextDrawables (group) {
         let toBeRemoved = [];
         for(let drawableID = 0; drawableID < this._allDrawables.length; ++drawableID){
@@ -912,7 +918,8 @@ class RenderWebGL extends EventEmitter {
                 projection,
                 {
                     extraUniforms,
-                    ignoreVisibility: true // Touching color ignores sprite visibility
+                    ignoreVisibility: true, // Touching color ignores sprite visibility,
+                    effectMask: ~ShaderManager.EFFECT_INFO.ghost.mask
                 });
 
             gl.stencilFunc(gl.EQUAL, 1, 1);
@@ -1050,7 +1057,7 @@ class RenderWebGL extends EventEmitter {
 
         drawable.updateMatrix();
         if (drawable.skin) {
-            drawable.skin.updateSilhouette();
+            drawable.skin.updateSilhouette(this._getDrawableScreenSpaceScale(drawable));
         } else {
             log.warn(`Could not find skin for drawable with id: ${drawableID}`);
         }
@@ -1086,7 +1093,7 @@ class RenderWebGL extends EventEmitter {
             if (drawable.getVisible() && drawable.getUniforms().u_ghost !== 0) {
                 drawable.updateMatrix();
                 if (drawable.skin) {
-                    drawable.skin.updateSilhouette();
+                    drawable.skin.updateSilhouette(this._getDrawableScreenSpaceScale(drawable));
                 } else {
                     log.warn(`Could not find skin for drawable with id: ${id}`);
                 }
@@ -1321,7 +1328,7 @@ class RenderWebGL extends EventEmitter {
         if (!drawable.skin || !drawable.skin.getTexture([100, 100])) return null;
 
         drawable.updateMatrix();
-        drawable.skin.updateSilhouette();
+        drawable.skin.updateSilhouette(this._getDrawableScreenSpaceScale(drawable));
         const bounds = drawable.getFastBounds();
 
         // Limit queries to the stage size.
@@ -1359,7 +1366,7 @@ class RenderWebGL extends EventEmitter {
                 if (drawable.skin && drawable._visible) {
                     // Update the CPU position data
                     drawable.updateMatrix();
-                    drawable.skin.updateSilhouette();
+                    drawable.skin.updateSilhouette(this._getDrawableScreenSpaceScale(drawable));
                     const candidateBounds = drawable.getFastBounds();
                     if (bounds.intersects(candidateBounds)) {
                         result.push({
@@ -1632,7 +1639,7 @@ class RenderWebGL extends EventEmitter {
         const projection = twgl.m4.ortho(bounds.left, bounds.right, bounds.top, bounds.bottom, -1, 1);
 
         // Draw the stamped sprite onto the PenSkin's framebuffer.
-        this._drawThese([stampID], ShaderManager.DRAW_MODE.stamp, projection, {ignoreVisibility: true});
+        this._drawThese([stampID], ShaderManager.DRAW_MODE.default, projection, {ignoreVisibility: true});
         skin._silhouetteDirty = true;
     }
 
@@ -1642,6 +1649,7 @@ class RenderWebGL extends EventEmitter {
      * @param {int} stampID - the unique ID of the Drawable to use as the stamp.
      */
     // penWrite (penSkinID, text, penAttributes, fontAttributes, x0, y0, isUpdatable) {
+    // GORRU
     penWrite (penSkinID, textSkinID, position) {
         // isUpdatable = (isUpdatable == 'true');
 
@@ -1778,6 +1786,18 @@ class RenderWebGL extends EventEmitter {
     }
 
     /**
+     * Get the screen-space scale of a drawable, as percentages of the drawable's "normal" size.
+     * @param {Drawable} drawable The drawable whose screen-space scale we're fetching.
+     * @returns {Array<number>} The screen-space X and Y dimensions of the drawable's scale, as percentages.
+     */
+    _getDrawableScreenSpaceScale (drawable) {
+        return [
+            drawable.scale[0] * this._gl.canvas.width / this._nativeSize[0],
+            drawable.scale[1] * this._gl.canvas.height / this._nativeSize[1]
+        ];
+    }
+
+    /**
      * Draw a set of Drawables, by drawable ID
      * @param {Array<int>} drawables The Drawable IDs to draw, possibly this._drawList.
      * @param {ShaderManager.DRAW_MODE} drawMode Draw normally, silhouette, etc.
@@ -1803,31 +1823,28 @@ class RenderWebGL extends EventEmitter {
 
             const drawable = this._allDrawables[drawableID];
             /** @todo check if drawable is inside the viewport before anything else */
-            if(drawable){
-                // Hidden drawables (e.g., by a "hide" block) are not drawn unless
-                // the ignoreVisibility flag is used (e.g. for stamping or touchingColor).
-                if (!drawable.getVisible() && !opts.ignoreVisibility) continue;
 
-                // Combine drawable scale with the native vs. backing pixel ratio
-                const drawableScale = [
-                    drawable.scale[0] * this._gl.canvas.width / this._nativeSize[0],
-                    drawable.scale[1] * this._gl.canvas.height / this._nativeSize[1]
-                ];
+            // Hidden drawables (e.g., by a "hide" block) are not drawn unless
+            // the ignoreVisibility flag is used (e.g. for stamping or touchingColor).
+            if (!drawable.getVisible() && !opts.ignoreVisibility) continue;
 
-                // If the skin or texture isn't ready yet, skip it.
-                if (!drawable.skin || !drawable.skin.getTexture(drawableScale)) continue;
+            // Combine drawable scale with the native vs. backing pixel ratio
+            const drawableScale = this._getDrawableScreenSpaceScale(drawable);
 
-                const uniforms = {};
+            // If the skin or texture isn't ready yet, skip it.
+            if (!drawable.skin || !drawable.skin.getTexture(drawableScale)) continue;
 
-                let effectBits = drawable.getEnabledEffects();
-                effectBits &= opts.hasOwnProperty('effectMask') ? opts.effectMask : effectBits;
-                const newShader = this._shaderManager.getShader(drawMode, effectBits);
+            const uniforms = {};
 
-                // Manually perform region check. Do not create functions inside a
-                // loop.
-                if (this._regionId !== newShader) {
-                    this._doExitDrawRegion();
-                    this._regionId = newShader;
+            let effectBits = drawable.enabledEffects;
+            effectBits &= opts.hasOwnProperty('effectMask') ? opts.effectMask : effectBits;
+            const newShader = this._shaderManager.getShader(drawMode, effectBits);
+
+            // Manually perform region check. Do not create functions inside a
+            // loop.
+            if (this._regionId !== newShader) {
+                this._doExitDrawRegion();
+                this._regionId = newShader;
 
                 currentShader = newShader;
                 gl.useProgram(currentShader.program);
@@ -1837,14 +1854,14 @@ class RenderWebGL extends EventEmitter {
                 });
             }
 
-                Object.assign(uniforms,
-                    drawable.skin.getUniforms(drawableScale),
-                    drawable.getUniforms());
+            Object.assign(uniforms,
+                drawable.skin.getUniforms(drawableScale),
+                drawable.getUniforms());
 
-                // Apply extra uniforms after the Drawable's, to allow overwriting.
-                if (opts.extraUniforms) {
-                    Object.assign(uniforms, opts.extraUniforms);
-                }
+            // Apply extra uniforms after the Drawable's, to allow overwriting.
+            if (opts.extraUniforms) {
+                Object.assign(uniforms, opts.extraUniforms);
+            }
 
             if (uniforms.u_skin) {
                 twgl.setTextureParameters(
@@ -1852,17 +1869,8 @@ class RenderWebGL extends EventEmitter {
                 );
             }
 
-                twgl.setUniforms(currentShader, uniforms);
-
-                /* adjust blend function for this skin */
-                if (drawable.skin.hasPremultipliedAlpha){
-                    gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-                } else {
-                    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-                }
-
-                twgl.drawBufferInfo(gl, this._bufferInfo, gl.TRIANGLES);
-            }
+            twgl.setUniforms(currentShader, uniforms);
+            twgl.drawBufferInfo(gl, this._bufferInfo, gl.TRIANGLES);
         }
 
         this._regionId = null;
@@ -2012,13 +2020,11 @@ class RenderWebGL extends EventEmitter {
             }
             */
             Drawable.sampleColor4b(vec, drawables[index].drawable, __blendColor);
-            // if we are fully transparent, go to the next one "down"
-            const sampleAlpha = __blendColor[3] / 255;
-            // premultiply alpha
-            dst[0] += __blendColor[0] * blendAlpha * sampleAlpha;
-            dst[1] += __blendColor[1] * blendAlpha * sampleAlpha;
-            dst[2] += __blendColor[2] * blendAlpha * sampleAlpha;
-            blendAlpha *= (1 - sampleAlpha);
+            // Equivalent to gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+            dst[0] += __blendColor[0] * blendAlpha;
+            dst[1] += __blendColor[1] * blendAlpha;
+            dst[2] += __blendColor[2] * blendAlpha;
+            blendAlpha *= (1 - (__blendColor[3] / 255));
         }
         // Backdrop could be transparent, so we need to go to the "clear color" of the
         // draw scene (white) as a fallback if everything was alpha
