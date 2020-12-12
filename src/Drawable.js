@@ -117,6 +117,12 @@ class Drawable {
         this._convexHullPoints = null;
         this._convexHullDirty = true;
 
+        // The precise bounding box will be from the transformed convex hull points,
+        // so initialize the array of transformed hull points in setConvexHullPoints.
+        // Initializing it once per convex hull recalculation avoids unnecessary creation of twgl.v3 objects.
+        this._transformedHullPoints = null;
+        this._transformedHullDirty = true;
+
         this._skinWasAltered = this._skinWasAltered.bind(this);
 
         this.isTouching = this._isTouchingNever;
@@ -137,6 +143,7 @@ class Drawable {
     setTransformDirty () {
         this._transformDirty = true;
         this._inverseTransformDirty = true;
+        this._transformedHullDirty = true;
     }
 
     /**
@@ -457,6 +464,14 @@ class Drawable {
     setConvexHullPoints (points) {
         this._convexHullPoints = points;
         this._convexHullDirty = false;
+
+        // Re-create the "transformed hull points" array.
+        // We only do this when the hull points change to avoid unnecessary allocations and GC.
+        this._transformedHullPoints = [];
+        for (let i = 0; i < points.length; i++) {
+            this._transformedHullPoints.push(twgl.v3.create());
+        }
+        this._transformedHullDirty = true;
     }
 
     /**
@@ -487,40 +502,6 @@ class Drawable {
 
     _isTouchingLinear (vec) {
         return this.skin.isTouchingLinear(getLocalPosition(this, vec));
-    }
-
-    /**
-     * Should the drawable use NEAREST NEIGHBOR or LINEAR INTERPOLATION mode
-     * @param {?Array<Number>} scale Optionally, the screen-space scale of the drawable.
-     * @return {boolean} True if the drawable should use nearest-neighbor interpolation.
-     */
-    useNearest (scale = this.scale) {
-        // Raster skins (bitmaps) should always prefer nearest neighbor
-        if (this.skin.isRaster) {
-            return true;
-        }
-
-        // If the effect bits for mosaic, pixelate, whirl, or fisheye are set, use linear
-        if ((this.enabledEffects & (
-            ShaderManager.EFFECT_INFO.fisheye.mask |
-            ShaderManager.EFFECT_INFO.whirl.mask |
-            ShaderManager.EFFECT_INFO.pixelate.mask |
-            ShaderManager.EFFECT_INFO.mosaic.mask
-        )) !== 0) {
-            return false;
-        }
-
-        // We can't use nearest neighbor unless we are a multiple of 90 rotation
-        if (this._direction % 90 !== 0) {
-            return false;
-        }
-
-        // If the scale of the skin is very close to 100 (0.99999 variance is okay I guess)
-        if (Math.abs(scale[0]) > 99 && Math.abs(scale[0]) < 101 &&
-            Math.abs(scale[1]) > 99 && Math.abs(scale[1]) < 101) {
-            return true;
-        }
-        return false;
     }
 
     /**
@@ -611,23 +592,27 @@ class Drawable {
      * @private
      */
     _getTransformedHullPoints () {
+        if (!this._transformedHullDirty) {
+            return this._transformedHullPoints;
+        }
+
         const projection = twgl.m4.ortho(-1, 1, -1, 1, -1, 1);
         const skinSize = this.skin.size;
         const halfXPixel = 1 / skinSize[0] / 2;
         const halfYPixel = 1 / skinSize[1] / 2;
         const tm = twgl.m4.multiply(this._uniforms.u_modelMatrix, projection);
-        const transformedHullPoints = [];
         for (let i = 0; i < this._convexHullPoints.length; i++) {
             const point = this._convexHullPoints[i];
-            const glPoint = twgl.v3.create(
-                0.5 + (-point[0] / skinSize[0]) - halfXPixel,
-                (point[1] / skinSize[1]) - 0.5 + halfYPixel,
-                0
-            );
-            twgl.m4.transformPoint(tm, glPoint, glPoint);
-            transformedHullPoints.push(glPoint);
+            const dstPoint = this._transformedHullPoints[i];
+
+            dstPoint[0] = 0.5 + (-point[0] / skinSize[0]) - halfXPixel;
+            dstPoint[1] = (point[1] / skinSize[1]) - 0.5 + halfYPixel;
+            twgl.m4.transformPoint(tm, dstPoint, dstPoint);
         }
-        return transformedHullPoints;
+
+        this._transformedHullDirty = false;
+
+        return this._transformedHullPoints;
     }
 
     /**
@@ -660,7 +645,7 @@ class Drawable {
         if (this.skin) {
             this.skin.updateSilhouette(this._scale);
 
-            if (this.useNearest()) {
+            if (this.skin.useNearest(this._scale, this)) {
                 this.isTouching = this._isTouchingNearest;
             } else {
                 this.isTouching = this._isTouchingLinear;
@@ -734,10 +719,10 @@ class Drawable {
             dst[3] = 0;
             return dst;
         }
-        
+
         const textColor =
         // commenting out to only use nearest for now
-        // drawable.useNearest() ?
+        // drawable.skin.useNearest(drawable._scale, drawable) ?
              drawable.skin._silhouette.colorAtNearest(localPosition, dst);
         // : drawable.skin._silhouette.colorAtLinear(localPosition, dst);
 
