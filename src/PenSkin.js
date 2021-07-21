@@ -96,7 +96,14 @@ class PenSkin extends Skin {
         this.onNativeSizeChanged = this.onNativeSizeChanged.bind(this);
         this._renderer.on(RenderConstants.Events.NativeSizeChanged, this.onNativeSizeChanged);
 
-        this._setCanvasSize(renderer.getNativeSize());
+        // this._setCanvasSize(renderer.getNativeSize());
+
+        var canvasSize = renderer.getNativeSize(); //[1280, 960];
+        const nativeX = renderer.getNativeX();
+        const nativeY = renderer.getNativeY();
+        var multiplier = nativeX === 0 || nativeY === 0 ? 2 : 1;
+        var size = [canvasSize[0] * multiplier, canvasSize[1] * multiplier];
+        this._setCanvasSize(size);
     }
 
     /**
@@ -309,11 +316,13 @@ class PenSkin extends Skin {
                 attachment: this._texture
             }
         ];
-        if (this._framebuffer) {
-            twgl.resizeFramebufferInfo(gl, this._framebuffer, attachments, width, height);
-        } else {
-            this._framebuffer = twgl.createFramebufferInfo(gl, attachments, width, height);
-        }
+        // if (this._framebuffer) {
+        //     twgl.resizeFramebufferInfo(gl, this._framebuffer, attachments, width, height);
+        // } else {
+        //     this._framebuffer = twgl.createFramebufferInfo(gl, attachments, width, height);
+        // }
+        // GORRU
+        this._framebuffer = twgl.createFramebufferInfo(gl, attachments, width, height);
 
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);

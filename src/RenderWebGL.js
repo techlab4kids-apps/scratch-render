@@ -321,20 +321,41 @@ class RenderWebGL extends EventEmitter {
         this._yTop = yTop;
 
         // swap yBottom & yTop to fit Scratch convention of +y=up
+        // this._projection = twgl.m4.ortho(xLeft, xRight, yBottom, yTop, -1, 1);
         this._projection = twgl.m4.ortho(xLeft, xRight, yBottom, yTop, -1, 1);
+        var multiplierX = 1;
+        // if(xLeft === 0){
+        //     multiplierX = multiplierX * 4;
+        // }
 
-        this._setNativeSize(Math.abs(xRight - xLeft), Math.abs(yBottom - yTop));
+        var multiplierY = 1;
+        // if(yBottom === 0){
+        //     multiplierY = multiplierY * 4;
+        // }
+
+        const width = Math.abs(xRight - xLeft) * multiplierX;
+        const height = Math.abs(yBottom - yTop) * multiplierY;
+
+        this._setNativeSize(width, height);
     }
 
     /**
      * @return {Array<int>} the "native" size of the stage, which is used for pen, query renders, etc.
      */
     getNativeSize() {
-        return [this._yTop - this._yBottom, this._xRight - this._xLeft];
+        return [this._xRight - this._xLeft, this._yTop - this._yBottom];
     }
 
     getStageSize() {
         return [this._nativeSize[0], this._nativeSize[1]];
+    }
+
+    getNativeX() {
+        return this._xLeft;
+    }
+
+    getNativeY() {
+        return this._yBottom;
     }
 
     /**
@@ -513,8 +534,10 @@ class RenderWebGL extends EventEmitter {
      */
     destroySkin(skinId) {
         const oldSkin = this._allSkins[skinId];
-        oldSkin.dispose();
-        delete this._allSkins[skinId];
+        if(oldSkin){
+            oldSkin.dispose();
+            delete this._allSkins[skinId];
+        }
     }
 
     /**
@@ -638,7 +661,7 @@ class RenderWebGL extends EventEmitter {
         for (let drawableID = 0; drawableID < this._allDrawables.length; ++drawableID) {
 
             const drawable = this._allDrawables[drawableID];
-            if (drawable && drawable._skin.constructor.name === "TextSkin") {
+            if (drawable && drawable._skin && drawable._skin.constructor && drawable._skin.constructor.name === "TextSkin") {
                 toBeRemoved.push(drawableID);
                 drawable.dispose();
                 delete this._allDrawables[drawableID];
@@ -1362,8 +1385,8 @@ class RenderWebGL extends EventEmitter {
 
         this._doExitDrawRegion();
 
-        const nativeCenterX = this._nativeSize[0] * 0.5;
-        const nativeCenterY = this._nativeSize[1] * 0.5;
+        const nativeCenterX = this._xLeft==0? 0: this._nativeSize[0] * 0.5;
+        const nativeCenterY = this._yBottom==0? this._nativeSize[1]: this._nativeSize[1] * 0.5;
 
         const scratchBounds = drawable.getFastBounds();
 
@@ -1735,17 +1758,36 @@ class RenderWebGL extends EventEmitter {
         const aabb = drawable._skin.getFenceBounds(drawable, __fenceBounds);
         const inset = Math.floor(Math.min(aabb.width, aabb.height) / 2);
 
-        const sx = this._xRight - Math.min(FENCE_WIDTH, inset);
-        if (aabb.right + dx < -sx) {
-            x = Math.ceil(drawable._position[0] - (sx + aabb.right));
-        } else if (aabb.left + dx > sx) {
-            x = Math.floor(drawable._position[0] + (sx - aabb.left));
+        // const sx = this._xRight - Math.min(FENCE_WIDTH, inset);
+        // if (aabb.right + dx < -sx) {
+        //     x = Math.ceil(drawable._position[0] - (sx + aabb.right));
+        // } else if (aabb.left + dx > sx) {
+        //     x = Math.floor(drawable._position[0] + (sx - aabb.left));
+        // }
+        // const sy = this._yTop - Math.min(FENCE_WIDTH, inset);
+        // if (aabb.top + dy < -sy) {
+        //     y = Math.ceil(drawable._position[1] - (sy + aabb.top));
+        // } else if (aabb.bottom + dy > sy) {
+        //     y = Math.floor(drawable._position[1] + (sy - aabb.bottom));
+        // }
+
+        // GORRU updates fences calculation based on canvas boards limits (no more only default -240, 240 - -180, 180)
+        const sxLeft = this._xLeft + Math.min(FENCE_WIDTH, inset);
+        const sxRight = this._xRight - Math.min(FENCE_WIDTH, inset);
+        let newX = aabb.right + dx;
+        if (newX < sxLeft) {
+            x = Math.ceil(drawable._position[0] + (sxLeft - aabb.right));
+        } else if (aabb.left + dx > sxRight) {
+            x = Math.floor(drawable._position[0] + (sxRight - aabb.left));
         }
-        const sy = this._yTop - Math.min(FENCE_WIDTH, inset);
-        if (aabb.top + dy < -sy) {
-            y = Math.ceil(drawable._position[1] - (sy + aabb.top));
-        } else if (aabb.bottom + dy > sy) {
-            y = Math.floor(drawable._position[1] + (sy - aabb.bottom));
+
+        const syBottom = this._yBottom + Math.min(FENCE_WIDTH, inset);
+        const syTop = this._yTop - Math.min(FENCE_WIDTH, inset);
+        let newY = aabb.top + dy;
+        if (newY < syBottom) {
+            y = Math.ceil(drawable._position[1] + (syBottom - aabb.top));
+        } else if (aabb.bottom + dy > syTop) {
+            y = Math.floor(drawable._position[1] + (syTop - aabb.bottom));
         }
         return [x, y];
     }
