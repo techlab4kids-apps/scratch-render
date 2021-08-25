@@ -218,6 +218,8 @@ class RenderWebGL extends EventEmitter {
         yBottom = yBottom === undefined ? -180 : yBottom;
         yTop = yTop === undefined ? 180 : yTop;
 
+        this.stageCoordinates = {xLeft: xLeft, xRight: xRight, yBottom: yBottom, yTop: yTop}
+
         this.setStageSize(xLeft, xRight, yBottom, yTop);
         this.resize(this._nativeSize[0], this._nativeSize[1]);
 
